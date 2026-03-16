@@ -1,0 +1,22 @@
+{
+  "name": "Research Process Quality",
+  "description": "Evaluates evidence of systematic, multi-perspective research rather than shallow information retrieval",
+  "dimensions": {
+    "source_diversity": {
+      "weight": 0.30,
+      "description": "Does the report draw from a variety of source types (academic, industry, government, primary data) rather than a single viewpoint or type?"
+    },
+    "counterargument_coverage": {
+      "weight": 0.30,
+      "description": "Does the report acknowledge alternative perspectives, dissenting evidence, or limitations of the prevailing view?"
+    },
+    "synthesis_quality": {
+      "weight": 0.25,
+      "description": "Does the report synthesize information across sources into coherent insights, rather than just summarizing each source separately?"
+    },
+    "recency_awareness": {
+      "weight": 0.15,
+      "description": "Where relevant, does the report distinguish between older and more recent findings, and flag areas where the landscape is evolving?"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Factual Rigor",
+  "description": "Assesses accuracy, verifiability, and resistance to hallucination",
+  "dimensions": {
+    "factual_accuracy": {
+      "weight": 0.40,
+      "description": "Are the specific claims, statistics, dates, and names in the report accurate and verifiable? Penalize fabricated figures or events."
+    },
+    "claim_precision": {
+      "weight": 0.25,
+      "description": "Are claims appropriately qualified (hedged when uncertain, definitive when well-established)? Penalize overconfident assertions on contested topics."
+    },
+    "source_grounding": {
+      "weight": 0.20,
+      "description": "Does the report reference recognizable, credible sources (named institutions, studies, publications) rather than vague attribution?"
+    },
+    "internal_consistency": {
+      "weight": 0.15,
+      "description": "Are statements within the report free of contradictions? Do conclusions follow logically from the evidence presented?"
+    }
+  }
+}

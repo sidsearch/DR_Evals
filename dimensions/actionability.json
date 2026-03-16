@@ -1,0 +1,22 @@
+{
+  "name": "Actionability",
+  "description": "For decision-support reports: how useful is this for someone who needs to act on it?",
+  "dimensions": {
+    "clear_recommendations": {
+      "weight": 0.35,
+      "description": "Does the report provide specific, concrete recommendations or next steps rather than vague conclusions?"
+    },
+    "tradeoff_analysis": {
+      "weight": 0.30,
+      "description": "Does the report identify key tradeoffs, risks, and constraints a decision-maker would need to weigh?"
+    },
+    "prioritization": {
+      "weight": 0.20,
+      "description": "Does the report distinguish between high-impact and low-impact findings, helping the reader focus on what matters most?"
+    },
+    "audience_fit": {
+      "weight": 0.15,
+      "description": "Is the report calibrated to the right level of detail and vocabulary for someone who needs to act on it (not too academic, not too superficial)?"
+    }
+  }
+}
