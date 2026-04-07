@@ -11,12 +11,28 @@ export ANTHROPIC_API_KEY=sk-...
 
 ## Usage
 
-**Interactive REPL:**
+**Interactive REPL (Rich + prompt-toolkit):**
 ```bash
 python cli.py
 python cli.py --dir /path/to/project
 python cli.py --model claude-sonnet-4-6
 ```
+
+Up/down navigates command history; **Tab** completes slash commands (e.g. `/quit`, `/tools`).
+
+**Full-screen TUI (Textual):**
+
+Requires dependencies from `requirements.txt` (including `textual`). From the `coding-agent` directory:
+
+```bash
+pip install -r requirements.txt
+python cli.py --tui
+python cli.py --tui --dir /path/to/project --model claude-sonnet-4-6
+```
+
+This launches a full-screen interface: scrollable transcript (**RichLog**), prompt at the bottom, header/footer. All [REPL commands](#repl-commands) work the same (`/cost`, `/reload`, `/quit`, …). **Ctrl+Q** quits the app (in addition to `/quit`). While the agent is responding, the input line is disabled until the turn finishes.
+
+`--tui` is only for interactive mode; it is ignored if you pass a one-shot prompt string.
 
 **One-shot:**
 ```bash
@@ -32,6 +48,7 @@ python cli.py "add type annotations to utils.py"
 | `--max-tokens N` | Max output tokens (default: 8096) |
 | `--yolo` | Auto-approve all bash commands without prompting |
 | `--trace FILE` | Log every tool call to a JSONL file (e.g. `trace.jsonl`) |
+| `--tui` | Full-screen Textual UI instead of the plain terminal REPL (see above) |
 
 ## REPL commands
 
@@ -148,10 +165,12 @@ Each line in the file is a JSON object:
 ## Project structure
 
 ```
-cli.py            — REPL and one-shot entry point
-agent.py          — Agentic loop, streaming, token tracking, history compaction
-tools.py          — Built-in tool implementations and dispatch
-tool_registry.py  — @tool decorator and plugin auto-loader
-plugins/          — Drop custom tool files here
-  example_tools.py  — Example: word_count, tree, env_var
+cli.py             — REPL and one-shot entry point
+repl_dispatch.py   — Shared slash-command handling (console REPL and TUI)
+tui.py             — Optional full-screen Textual UI (`--tui`)
+agent.py           — Agentic loop, streaming, token tracking, history compaction
+tools.py           — Built-in tool implementations and dispatch
+tool_registry.py   — @tool decorator and plugin auto-loader
+plugins/           — Drop custom tool files here
+  example_tools.py   — Example: word_count, tree, env_var
 ```
