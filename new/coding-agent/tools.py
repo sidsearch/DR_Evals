@@ -7,7 +7,11 @@ import subprocess
 import glob as glob_module
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+# Tracks the previous content of files before the last edit/write,
+# keyed by absolute path. Used by undo_edit.
+_EDIT_HISTORY: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +39,9 @@ def write_file(path: str, content: str) -> str:
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        # Save previous content for undo
+        if p.exists():
+            _EDIT_HISTORY[str(p.resolve())] = p.read_text(errors="replace")
         p.write_text(content)
         lines = content.count("\n") + 1
         return f"OK: wrote {lines} lines to {path}"
@@ -45,16 +52,30 @@ def write_file(path: str, content: str) -> str:
 def edit_file(path: str, old_string: str, new_string: str) -> str:
     """Replace the first occurrence of old_string with new_string in a file."""
     try:
-        text = Path(path).read_text()
+        p = Path(path)
+        text = p.read_text()
         if old_string not in text:
             return f"ERROR: old_string not found in {path}"
+        # Save previous content for undo
+        _EDIT_HISTORY[str(p.resolve())] = text
         updated = text.replace(old_string, new_string, 1)
-        Path(path).write_text(updated)
+        p.write_text(updated)
         return f"OK: edited {path}"
     except FileNotFoundError:
         return f"ERROR: file not found: {path}"
     except Exception as e:
         return f"ERROR: {e}"
+
+
+def undo_edit(path: str) -> str:
+    """Revert a file to its state before the last write_file or edit_file call."""
+    key = str(Path(path).resolve())
+    if key not in _EDIT_HISTORY:
+        return f"ERROR: no edit history for {path}"
+    previous = _EDIT_HISTORY.pop(key)
+    Path(path).write_text(previous)
+    lines = previous.count("\n") + 1
+    return f"OK: reverted {path} to previous state ({lines} lines)"
 
 
 def bash(command: str, timeout: int = 30) -> str:
@@ -134,6 +155,56 @@ def ls(path: str = ".") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Task tracking  (inspired by LangChain deep agents)
+# ---------------------------------------------------------------------------
+
+_TASKS: list[dict] = []
+_TASK_STATUSES = {"pending", "in_progress", "done", "blocked"}
+
+
+def task_create(description: str) -> str:
+    """Create a new task with status 'pending' and return its ID."""
+    task_id = len(_TASKS) + 1
+    _TASKS.append({"id": task_id, "description": description, "status": "pending", "notes": ""})
+    return f"OK: created task #{task_id} — {description}"
+
+
+def task_update(task_id: int, status: str, notes: str = "") -> str:
+    """Update the status (and optional notes) of a task.
+    Valid statuses: pending, in_progress, done, blocked.
+    """
+    if status not in _TASK_STATUSES:
+        return f"ERROR: invalid status '{status}'. Use: {', '.join(sorted(_TASK_STATUSES))}"
+    for t in _TASKS:
+        if t["id"] == task_id:
+            t["status"] = status
+            if notes:
+                t["notes"] = notes
+            return f"OK: task #{task_id} → {status}"
+    return f"ERROR: task #{task_id} not found"
+
+
+def task_list() -> str:
+    """List all tasks with their current status."""
+    if not _TASKS:
+        return "(no tasks)"
+    icons = {"pending": "○", "in_progress": "◐", "done": "●", "blocked": "✗"}
+    lines = []
+    for t in _TASKS:
+        icon = icons.get(t["status"], "?")
+        line = f"{icon} #{t['id']} [{t['status']}] {t['description']}"
+        if t["notes"]:
+            line += f"\n    → {t['notes']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def tasks_snapshot() -> list[dict]:
+    """Return a copy of the tasks list (for the CLI task display)."""
+    return list(_TASKS)
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table  {name -> (fn, schema)}
 # ---------------------------------------------------------------------------
 
@@ -158,7 +229,7 @@ TOOLS: dict[str, tuple[Any, dict]] = {
         write_file,
         {
             "name": "write_file",
-            "description": "Write content to a file (creates or overwrites). Parent dirs are created automatically.",
+            "description": "Write content to a file (creates or overwrites). Parent dirs are created automatically. Previous content is saved for undo.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -173,7 +244,7 @@ TOOLS: dict[str, tuple[Any, dict]] = {
         edit_file,
         {
             "name": "edit_file",
-            "description": "Replace the first occurrence of old_string with new_string in a file. old_string must be unique enough to identify the exact location.",
+            "description": "Replace the first occurrence of old_string with new_string in a file. old_string must be unique enough to identify the exact location. Previous content is saved for undo.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -182,6 +253,20 @@ TOOLS: dict[str, tuple[Any, dict]] = {
                     "new_string": {"type": "string", "description": "Text to replace it with"},
                 },
                 "required": ["path", "old_string", "new_string"],
+            },
+        },
+    ),
+    "undo_edit": (
+        undo_edit,
+        {
+            "name": "undo_edit",
+            "description": "Revert a file to its state before the last write_file or edit_file. Only one level of undo is kept per file.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to revert"},
+                },
+                "required": ["path"],
             },
         },
     ),
@@ -245,14 +330,83 @@ TOOLS: dict[str, tuple[Any, dict]] = {
             },
         },
     ),
+    "task_create": (
+        task_create,
+        {
+            "name": "task_create",
+            "description": "Create a new task to track a step in the current work. Use this to break complex requests into discrete subtasks.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "Short description of what this task involves"},
+                },
+                "required": ["description"],
+            },
+        },
+    ),
+    "task_update": (
+        task_update,
+        {
+            "name": "task_update",
+            "description": "Update a task's status. Call with in_progress when starting, done when finished, blocked if stuck.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "description": "Task ID returned by task_create"},
+                    "status":  {"type": "string", "description": "New status: pending | in_progress | done | blocked"},
+                    "notes":   {"type": "string", "description": "Optional notes about progress or blockers"},
+                },
+                "required": ["task_id", "status"],
+            },
+        },
+    ),
+    "task_list": (
+        task_list,
+        {
+            "name": "task_list",
+            "description": "List all tasks and their current status.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    ),
 }
 
 
-def dispatch(name: str, inputs: dict) -> str:
-    """Call a tool by name with the given inputs dict."""
+def _merge_plugins() -> None:
+    """Load tools registered via @tool (from plugins and direct registry use)."""
+    try:
+        from tool_registry import load_plugins, registry_tools
+        loaded = load_plugins("plugins")
+        if loaded:
+            pass  # modules are loaded; registry is populated as a side effect
+        for name, entry in registry_tools().items():
+            if name not in TOOLS:
+                TOOLS[name] = entry
+    except ImportError:
+        pass
+
+
+# Merge plugin tools into TOOLS at import time
+_merge_plugins()
+
+
+def dispatch(name: str, inputs: dict, approval_fn: Callable[[str], bool] | None = None) -> str:
+    """Call a tool by name with the given inputs dict.
+
+    For the 'bash' tool, approval_fn (if provided) is called with the command
+    string. If it returns False the command is not run.
+    """
     if name not in TOOLS:
         return f"ERROR: unknown tool '{name}'"
     fn, _ = TOOLS[name]
+    # Bash approval gate
+    if name == "bash" and approval_fn is not None:
+        command = inputs.get("command", "")
+        if not approval_fn(command):
+            return "ERROR: command rejected by user"
     try:
         return fn(**inputs)
     except TypeError as e:
@@ -262,3 +416,8 @@ def dispatch(name: str, inputs: dict) -> str:
 def schemas() -> list[dict]:
     """Return just the schemas (for passing to the Anthropic API)."""
     return [schema for _, schema in TOOLS.values()]
+
+
+def edit_history_keys() -> list[str]:
+    """Return the paths that currently have undo history."""
+    return list(_EDIT_HISTORY.keys())
