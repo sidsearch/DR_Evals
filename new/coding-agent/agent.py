@@ -42,6 +42,8 @@ class Agent:
         bash_approval_fn: Callable[[str], bool] | None = None,
         max_tokens: int = 8096,
         trace_file: str | None = None,
+        system_suffix: str = "",
+        on_tool_result: Callable[[str, dict, str], None] | None = None,
     ):
         self.client = anthropic.Anthropic()
         self.model = model
@@ -59,6 +61,10 @@ class Agent:
         self._trace_path = Path(trace_file) if trace_file else None
         if self._trace_path:
             self._trace_path.parent.mkdir(parents=True, exist_ok=True)
+        # Optional extra text appended to system prompt (e.g. program.md strategy).
+        self.system_suffix = system_suffix
+        # Called after every tool execution: on_tool_result(tool_name, inputs, result)
+        self.on_tool_result = on_tool_result
 
     def _system(self) -> str:
         import os
@@ -78,7 +84,10 @@ class Agent:
                     git_info = f"\nGit branch: {branch}"
         except Exception:
             pass
-        return SYSTEM.format(cwd=cwd, git_info=git_info)
+        system = SYSTEM.format(cwd=cwd, git_info=git_info)
+        if self.system_suffix:
+            system = system + "\n\n" + self.system_suffix
+        return system
 
     def stream_turn(self, user_message: str) -> Iterator[str]:
         """
@@ -145,6 +154,8 @@ class Agent:
                     call.input,
                     approval_fn=self.bash_approval_fn,
                 )
+                if self.on_tool_result is not None:
+                    self.on_tool_result(call.name, call.input, result)
                 self._trace(
                     "tool_call",
                     tool=call.name,
@@ -160,6 +171,14 @@ class Agent:
                 })
 
             self.history.append({"role": "user", "content": tool_results})
+
+    def run(self, user_message: str) -> str:
+        """
+        Blocking version of stream_turn — collects all chunks and returns the
+        full response as a string. Useful for scripted / loop-style callers that
+        don't need streaming output.
+        """
+        return "".join(self.stream_turn(user_message))
 
     def compact_history(self) -> str:
         """
