@@ -9,9 +9,9 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-# Tracks the previous content of files before the last edit/write,
-# keyed by absolute path. Used by undo_edit.
-_EDIT_HISTORY: dict[str, str] = {}
+# Tracks previous content of files before each edit/write,
+# keyed by absolute path. Each entry is a stack (newest last).
+_EDIT_HISTORY: dict[str, list[str]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,8 @@ def write_file(path: str, content: str) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         # Save previous content for undo
         if p.exists():
-            _EDIT_HISTORY[str(p.resolve())] = p.read_text(errors="replace")
+            key = str(p.resolve())
+            _EDIT_HISTORY.setdefault(key, []).append(p.read_text(errors="replace"))
         p.write_text(content)
         lines = content.count("\n") + 1
         return f"OK: wrote {lines} lines to {path}"
@@ -49,18 +50,22 @@ def write_file(path: str, content: str) -> str:
         return f"ERROR: {e}"
 
 
-def edit_file(path: str, old_string: str, new_string: str) -> str:
-    """Replace the first occurrence of old_string with new_string in a file."""
+def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    """Replace old_string with new_string in a file.
+    By default replaces only the first occurrence; set replace_all=True to replace every occurrence.
+    """
     try:
         p = Path(path)
         text = p.read_text()
         if old_string not in text:
             return f"ERROR: old_string not found in {path}"
         # Save previous content for undo
-        _EDIT_HISTORY[str(p.resolve())] = text
-        updated = text.replace(old_string, new_string, 1)
+        _EDIT_HISTORY.setdefault(str(p.resolve()), []).append(text)
+        count = text.count(old_string)
+        updated = text.replace(old_string, new_string) if replace_all else text.replace(old_string, new_string, 1)
         p.write_text(updated)
-        return f"OK: edited {path}"
+        replaced = count if replace_all else 1
+        return f"OK: edited {path} ({replaced} replacement{'s' if replaced != 1 else ''})"
     except FileNotFoundError:
         return f"ERROR: file not found: {path}"
     except Exception as e:
@@ -68,14 +73,21 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
 
 
 def undo_edit(path: str) -> str:
-    """Revert a file to its state before the last write_file or edit_file call."""
+    """Revert a file to its state before the last write_file or edit_file call.
+    Can be called multiple times to step back through the full edit history.
+    """
     key = str(Path(path).resolve())
-    if key not in _EDIT_HISTORY:
+    stack = _EDIT_HISTORY.get(key)
+    if not stack:
         return f"ERROR: no edit history for {path}"
-    previous = _EDIT_HISTORY.pop(key)
+    previous = stack.pop()
+    if not stack:
+        del _EDIT_HISTORY[key]
     Path(path).write_text(previous)
     lines = previous.count("\n") + 1
-    return f"OK: reverted {path} to previous state ({lines} lines)"
+    remaining = len(stack)
+    extra = f"  ({remaining} older snapshot{'s' if remaining != 1 else ''} available)" if remaining else ""
+    return f"OK: reverted {path} to previous state ({lines} lines){extra}"
 
 
 def bash(command: str, timeout: int = 30) -> str:
@@ -244,13 +256,14 @@ TOOLS: dict[str, tuple[Any, dict]] = {
         edit_file,
         {
             "name": "edit_file",
-            "description": "Replace the first occurrence of old_string with new_string in a file. old_string must be unique enough to identify the exact location. Previous content is saved for undo.",
+            "description": "Replace old_string with new_string in a file. Replaces only the first occurrence unless replace_all=true. Previous content is saved for undo.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "path":       {"type": "string", "description": "File to edit"},
-                    "old_string": {"type": "string", "description": "Exact text to find and replace"},
-                    "new_string": {"type": "string", "description": "Text to replace it with"},
+                    "path":        {"type": "string",  "description": "File to edit"},
+                    "old_string":  {"type": "string",  "description": "Exact text to find and replace"},
+                    "new_string":  {"type": "string",  "description": "Text to replace it with"},
+                    "replace_all": {"type": "boolean", "description": "If true, replace every occurrence (default false)"},
                 },
                 "required": ["path", "old_string", "new_string"],
             },
@@ -260,7 +273,7 @@ TOOLS: dict[str, tuple[Any, dict]] = {
         undo_edit,
         {
             "name": "undo_edit",
-            "description": "Revert a file to its state before the last write_file or edit_file. Only one level of undo is kept per file.",
+            "description": "Revert a file one step back through its edit history. Can be called repeatedly to undo multiple edits.",
             "input_schema": {
                 "type": "object",
                 "properties": {

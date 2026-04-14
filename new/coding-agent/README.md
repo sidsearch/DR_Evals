@@ -4,9 +4,19 @@ A terminal coding agent built on the Anthropic API. Streams responses, executes 
 
 ## Setup
 
+**Anthropic API (default):**
 ```bash
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY=sk-...
+```
+
+**AWS Bedrock:**
+```bash
+pip install -r requirements.txt
+# Standard AWS credential chain — no ANTHROPIC_API_KEY needed.
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_DEFAULT_REGION=us-east-1
 ```
 
 ## Usage
@@ -45,10 +55,19 @@ python cli.py "add type annotations to utils.py"
 |------|-------------|
 | `--model MODEL` | Claude model ID (default: `claude-opus-4-6`) |
 | `--dir DIR` | Working directory (default: `.`) |
-| `--max-tokens N` | Max output tokens (default: 8096) |
+| `--max-tokens N` | Max output tokens (default: `16000`) |
 | `--yolo` | Auto-approve all bash commands without prompting |
 | `--trace FILE` | Log every tool call to a JSONL file (e.g. `trace.jsonl`) |
 | `--tui` | Full-screen Textual UI instead of the plain terminal REPL (see above) |
+| `--bedrock` | Use AWS Bedrock instead of the Anthropic API |
+| `--aws-region REGION` | AWS region for Bedrock (e.g. `us-east-1`); falls back to `AWS_DEFAULT_REGION` |
+
+**Bedrock example:**
+```bash
+python cli.py --bedrock \
+  --aws-region us-east-1 \
+  --model anthropic.claude-opus-4-5-20250514-v1:0
+```
 
 ## REPL commands
 
@@ -60,7 +79,7 @@ python cli.py "add type annotations to utils.py"
 | `/cost` | Show session token usage and estimated cost |
 | `/model <id>` | Switch model mid-session |
 | `/yolo` | Toggle bash approval mode on/off |
-| `/undo <path>` | Revert a file to its state before the last agent edit |
+| `/undo <path>` | Revert a file one step back through its edit history (repeatable) |
 | `/save [file]` | Save conversation history to JSON (default: `history.json`) |
 | `/load [file]` | Load conversation history from JSON |
 | `/reload` | Hot-reload plugins from the `plugins/` directory |
@@ -76,8 +95,8 @@ The agent has access to these tools out of the box:
 |------|-------------|
 | `read_file` | Read lines from a file with offset/limit paging |
 | `write_file` | Write (or overwrite) a file; previous content saved for undo |
-| `edit_file` | Replace the first occurrence of a string in a file |
-| `undo_edit` | Revert a file to its state before the last write or edit |
+| `edit_file` | Replace a string in a file; pass `replace_all=true` to replace every occurrence |
+| `undo_edit` | Revert a file one step back; call repeatedly to walk back through full edit history |
 | `bash` | Run a shell command (subject to approval mode) |
 | `find_files` | Find files matching a glob pattern |
 | `grep` | Search files with a regex pattern |

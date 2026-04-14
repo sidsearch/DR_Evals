@@ -18,6 +18,7 @@ from typing import Iterator, Callable
 from tools import dispatch, schemas
 
 MODEL = "claude-opus-4-6"
+MAX_TOKENS = 16000
 
 SYSTEM = """\
 You are a coding agent running in a terminal.
@@ -40,12 +41,21 @@ class Agent:
         model: str = MODEL,
         cwd: str = ".",
         bash_approval_fn: Callable[[str], bool] | None = None,
-        max_tokens: int = 8096,
+        max_tokens: int = MAX_TOKENS,
         trace_file: str | None = None,
         system_suffix: str = "",
         on_tool_result: Callable[[str, dict, str], None] | None = None,
+        bedrock: bool = False,
+        aws_region: str | None = None,
     ):
-        self.client = anthropic.Anthropic()
+        if bedrock:
+            kwargs = {}
+            if aws_region:
+                kwargs["aws_region"] = aws_region
+            self.client = anthropic.AnthropicBedrock(**kwargs)  # type: ignore[assignment]
+        else:
+            self.client = anthropic.Anthropic()
+        self._bedrock = bedrock
         self.model = model
         self.cwd = cwd
         self.bash_approval_fn = bash_approval_fn

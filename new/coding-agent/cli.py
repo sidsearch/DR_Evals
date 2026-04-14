@@ -4,6 +4,7 @@ Coding agent CLI.
 
 Usage:
     python cli.py [--model MODEL] [--dir DIR] [--max-tokens N] [--yolo] [--trace FILE]
+    python cli.py [--bedrock] [--aws-region REGION] [--model anthropic.claude-opus-4-5-20250514-v1:0]
     python cli.py [--tui]   # full-screen Textual UI (optional)
     python cli.py "one-shot prompt"
 
@@ -131,7 +132,8 @@ def _run_agent_turn(agent: Agent, user_input: str) -> None:
 
 def run_interactive(agent: Agent) -> None:
     console.print(banner_panel())
-    console.print(f"  model  : [bold]{agent.model}[/bold]")
+    provider = "bedrock" if getattr(agent, "_bedrock", False) else "anthropic"
+    console.print(f"  model  : [bold]{agent.model}[/bold]  [dim]({provider})[/dim]")
     console.print(f"  cwd    : [bold]{os.path.abspath(agent.cwd)}[/bold]")
 
     yolo_flag: list[bool] = [getattr(agent, "_yolo_init", False)]
@@ -204,7 +206,7 @@ def main() -> None:
     parser.add_argument("--model", default="claude-opus-4-6", help="Claude model ID")
     parser.add_argument("--dir", default=".", help="Working directory (default: .)")
     parser.add_argument(
-        "--max-tokens", type=int, default=8096, help="Max output tokens (default: 8096)"
+        "--max-tokens", type=int, default=16000, help="Max output tokens (default: 16000)"
     )
     parser.add_argument(
         "--yolo", action="store_true", help="Auto-approve all bash commands (no prompts)"
@@ -220,19 +222,42 @@ def main() -> None:
         action="store_true",
         help="Run interactive session in a Textual full-screen UI (requires: textual)",
     )
+    parser.add_argument(
+        "--bedrock",
+        action="store_true",
+        help="Use AWS Bedrock instead of the Anthropic API (requires AWS credentials)",
+    )
+    parser.add_argument(
+        "--aws-region",
+        metavar="REGION",
+        default=None,
+        help="AWS region for Bedrock (e.g. us-east-1). Falls back to AWS_DEFAULT_REGION env var.",
+    )
     args = parser.parse_args()
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        console.print(
-            "[bold red]Error:[/bold red] ANTHROPIC_API_KEY environment variable not set."
-        )
-        sys.exit(1)
+    if args.bedrock:
+        # Bedrock uses standard AWS credential chain — no ANTHROPIC_API_KEY needed.
+        # Warn if the model ID looks like a plain Anthropic ID rather than a Bedrock ARN/ID.
+        if not args.model.startswith("anthropic.") and ":" not in args.model:
+            console.print(
+                "[yellow]Warning:[/yellow] Bedrock model IDs typically look like "
+                "[bold]anthropic.claude-opus-4-5-20250514-v1:0[/bold]. "
+                f"Got: [bold]{args.model}[/bold]. Pass [bold]--model[/bold] with the full Bedrock ID if the request fails."
+            )
+    else:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            console.print(
+                "[bold red]Error:[/bold red] ANTHROPIC_API_KEY environment variable not set."
+            )
+            sys.exit(1)
 
     agent = Agent(
         model=args.model,
         cwd=args.dir,
         max_tokens=args.max_tokens,
         trace_file=args.trace,
+        bedrock=args.bedrock,
+        aws_region=args.aws_region,
     )
     agent._yolo_init = args.yolo  # type: ignore[attr-defined]
     if args.trace:
