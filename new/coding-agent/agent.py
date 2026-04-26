@@ -10,7 +10,9 @@ Flow per turn:
 """
 
 import json
+import random
 import subprocess
+import time
 import anthropic
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +21,11 @@ from tools import dispatch, schemas
 
 MODEL = "claude-opus-4-6"
 MAX_TOKENS = 16000
+
+_MAX_RETRIES = 4
+_BASE_DELAY = 1.0
+_LOOP_THRESHOLD = 5
+_RETRYABLE = (anthropic.RateLimitError, anthropic.InternalServerError, anthropic.APIConnectionError)
 
 SYSTEM = """\
 You are a coding agent running in a terminal.
@@ -75,6 +82,9 @@ class Agent:
         self.system_suffix = system_suffix
         # Called after every tool execution: on_tool_result(tool_name, inputs, result)
         self.on_tool_result = on_tool_result
+        # Loop detection: track consecutive identical tool batch signatures
+        self._last_tool_batch_sig: str | None = None
+        self._consecutive_batch_count: int = 0
 
     def _system(self) -> str:
         import os
@@ -94,7 +104,18 @@ class Agent:
                     git_info = f"\nGit branch: {branch}"
         except Exception:
             pass
+        skills_dir = Path(__file__).parent / "skills"
+        skills_section = ""
+        if skills_dir.is_dir():
+            skill_names = sorted(p.stem for p in skills_dir.glob("*.md"))
+            if skill_names:
+                skills_section = (
+                    f"\n\nAvailable skills (call use_skill(name) to load step-by-step instructions): "
+                    + ", ".join(skill_names)
+                )
+
         system = SYSTEM.format(cwd=cwd, git_info=git_info)
+        system += skills_section
         if self.system_suffix:
             system = system + "\n\n" + self.system_suffix
         return system
@@ -107,33 +128,47 @@ class Agent:
         """
         self.turn_input_tokens = 0
         self.turn_output_tokens = 0
+        self._last_tool_batch_sig = None
+        self._consecutive_batch_count = 0
         self._trace("user_message", content=user_message)
         self.history.append({"role": "user", "content": user_message})
 
         while True:
-            # --- call the model ---
-            with self.client.messages.stream(
-                model=self.model,
-                system=self._system(),
-                messages=self.history,
-                tools=schemas(),
-                max_tokens=self.max_tokens,
-            ) as stream:
-                for event in stream:
-                    if (
-                        event.type == "content_block_delta"
-                        and event.delta.type == "text_delta"
-                    ):
-                        yield event.delta.text
-
-                final = stream.get_final_message()
+            # --- call the model (with retry on transient API errors) ---
+            final = None
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    with self.client.messages.stream(
+                        model=self.model,
+                        system=self._system(),
+                        messages=self.history,
+                        tools=schemas(),
+                        max_tokens=self.max_tokens,
+                    ) as stream:
+                        for event in stream:
+                            if (
+                                event.type == "content_block_delta"
+                                and event.delta.type == "text_delta"
+                            ):
+                                yield event.delta.text
+                        final = stream.get_final_message()
+                    break  # success — exit retry loop
+                except _RETRYABLE as e:
+                    if attempt == _MAX_RETRIES - 1:
+                        raise
+                    delay = _BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+                    yield f"\n[API error ({type(e).__name__}), retrying in {delay:.1f}s…]\n"
+                    time.sleep(delay)
 
             # Accumulate token usage
-            if hasattr(final, "usage") and final.usage:
+            if final and hasattr(final, "usage") and final.usage:
                 self.turn_input_tokens += final.usage.input_tokens
                 self.turn_output_tokens += final.usage.output_tokens
                 self.total_input_tokens += final.usage.input_tokens
                 self.total_output_tokens += final.usage.output_tokens
+
+            if not final:
+                break
 
             # Build assistant content list
             assistant_content: list[dict] = []
@@ -153,6 +188,32 @@ class Agent:
             tool_calls = [b for b in final.content if b.type == "tool_use"]
 
             if not tool_calls:
+                break
+
+            # --- loop detection ---
+            batch_sig = "|".join(
+                f"{c.name}:{json.dumps(c.input, sort_keys=True)}" for c in tool_calls
+            )
+            if batch_sig == self._last_tool_batch_sig:
+                self._consecutive_batch_count += 1
+            else:
+                self._last_tool_batch_sig = batch_sig
+                self._consecutive_batch_count = 1
+
+            if self._consecutive_batch_count >= _LOOP_THRESHOLD:
+                loop_msg = (
+                    f"Loop detected: the same tool call(s) have been made "
+                    f"{self._consecutive_batch_count} times in a row. "
+                    "Stopping to prevent an infinite loop — try a different approach."
+                )
+                yield f"\n[{loop_msg}]\n"
+                self.history.append({
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": c.id, "content": f"ERROR: {loop_msg}"}
+                        for c in tool_calls
+                    ],
+                })
                 break
 
             # --- execute tools ---
@@ -246,6 +307,8 @@ class Agent:
         self.total_output_tokens = 0
         self.turn_input_tokens = 0
         self.turn_output_tokens = 0
+        self._last_tool_batch_sig = None
+        self._consecutive_batch_count = 0
 
 
 def _fmt_inputs(inputs: dict) -> str:
